@@ -10,8 +10,9 @@ from adknob      import ADKnob
 from spinnerknob import SpinnerKnob
 from switchknob  import SwitchKnob
 from toggleknob  import ToggleKnob
-from sy300midi import set_sy300, get_midi_ports
+from sy300midi import set_sy300, get_midi_ports, req_sy300
 import mido
+from kivy.clock import Clock
 
 #:import XYKnob xyknob
 #:import CircleKnob circleknob
@@ -370,6 +371,7 @@ class OSCStrip(BoxLayout):
     osc_adr  = NumericProperty()
 
 
+
 class PanelApp(App):
     title = 'SY300 OSC Sound Generation Control Panel'
     Window.size = (1725, 710)
@@ -379,7 +381,7 @@ class PanelApp(App):
 
     def build(self):
         r = Builder.load_string(kv)
-#note rate/combo switch needs special dealings, as there is ONE address for TWO widgets.... dont drop them!
+        # rate/combo switch needs special dealings, as there is ONE address for TWO widgets.... don't drop them!
         for osc in r.children:    # these children should be the three strips
             for c in osc.walk(restrict=True, loopback=False ):
                 if hasattr(c, 'addresses'):
@@ -399,36 +401,46 @@ class PanelApp(App):
                print('  ', k, ' text is ', self.adr2knob[k].text, self.adr2knob[k])
            else:
                print('  ', k , '(knob does not have text field)', self.adr2knob[k])
-
-
         return r
 
     def send2midi(self, osc, adr, val):
       global to_sy300
-      print( f'message to midi: osc:0x{osc:2x} adr:0x{adr:2x} val:0x{val:2x}' )
-      #if (osc==0x30) and (adr==0x17):   # our pet switch (lfo 3/1)
-      #  a = self.adr2knob[  0x30, 0x1a  ].value     # lfo 3/1: Ptch Depth = (24 or 32 or 40 or 48)
-      #  b = self.adr2knob[  0x30, 0x1b  ].value     # lfo 3/1: Fltr Depth = address (typically 0..40)
-      #  c = self.adr2knob[  0x30, 0x1c  ].value     # lfo 3/1: Amp Dpth   = value to set
-      #  print ( 'about to change osc', a, ' at addr', b, ' setting value ',c, 'self ptr was', self.adr2knob[a,b] )
-      #  self.adr2knob[ a,b ].set_knob( b, c )
-      #  #to use, set knobs for a, b, and c.  Then toggle the LFO switch to send message!
-      print('MIDI ADDRESS:',[0x20, 0x00, osc, adr])
       to_sy300.send(set_sy300([0x20, 0x00, osc, adr], [val]))
 
+    def callback_read_midi(self, dt):
+        global from_sy300  # Message from MIDI: sysex data=(65,16,0,0,0,19,18,32,0,32,1,3,60)
+        for msg in from_sy300.iter_pending():
+            if (msg.type == 'sysex'):
+                adr = msg.data[9:11]
+                for d in msg.data[11:-1]:
+                    if adr in self.adr2knob:
+                          self.adr2knob[adr].set_knob(adr[1],d)
+                    adr = (adr[0], adr[1]+1)
 
     def on_start(self):
         global to_sy300
+        global from_sy300
         midi_ports = get_midi_ports()
         if not midi_ports:
             print("Connection Failure: SY300 not connected")
         else:
             print(f"SYS300 input:{midi_ports['in']}  output: {midi_ports['out']}")
         to_sy300 = mido.open_output(midi_ports['out'])
-        print("Port Opened")
-        super().on_start()
+        from_sy300 = mido.open_input(midi_ports['in'])
+        Clock.schedule_interval(self.callback_read_midi, .1)
+        to_sy300.send(req_sy300([0x20,0x00,0x18,0x00], [4]))
+        to_sy300.send(req_sy300([0x20, 0x00, 0x20, 0x00], [0x29]))
+        to_sy300.send(req_sy300([0x20, 0x00, 0x28, 0x00], [0x29]))
+        to_sy300.send(req_sy300([0x20, 0x00, 0x30, 0x00], [0x29]))
 
+    def on_stop(self):
+        global to_sy300
+        global from_sy300
+        to_sy300.close()
+        from_sy300.close()
 
+    def on_hide(self):
+        Window.raise_window()
 
 
 PanelApp().run()
