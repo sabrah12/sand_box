@@ -2,21 +2,21 @@ from kivy.app import App
 from kivy.lang import Builder
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
 from kivy.properties import BooleanProperty, StringProperty, NumericProperty, ListProperty
 from kivy.core.window import Window
-from circleknob  import CircleKnob
-from xyknob      import XYKnob
-from adknob      import ADKnob
+from circleknob import CircleKnob
+from xyknob import XYKnob
+from adknob import ADKnob
 from spinnerknob import SpinnerKnob
-from switchknob  import SwitchKnob
-from toggleknob  import ToggleKnob
+from switchknob import SwitchKnob
+from toggleknob import ToggleKnob
 from sy300midi import set_sy300, get_midi_ports, req_sy300
 import mido
 from kivy.clock import Clock
+from kivy.factory import Factory
 
-#:import XYKnob xyknob
-#:import CircleKnob circleknob
-#:import ADKnob adknob
 kv = """
 
 <OSC>
@@ -54,7 +54,7 @@ kv = """
                 color: [144/255, 228/255 , 1, 1]
                 size_hint_x: .5
                 opacity:  0 if root.parent.is_osc_1 is True else 1     
-                disabled: 1 if root.parent.is_osc_1 is True else 0                        
+                disabled: 1 if (root.parent.is_osc_1 or osc_wave.text in ['INPUT']) is True else 0                        
             SpinnerKnob:
                 text: 'SYNC'
                 comaddresses: [ 0x00  + 2 * (root.parent.osc_text == "3") if root.parent.osc_text != "1" else 500 ]
@@ -62,7 +62,7 @@ kv = """
                 color: [144/255, 228/255 , 1, 1]
                 values: ['Sync Off', 'Sync On', 'Sync LoFi']
                 opacity:   0 if root.parent.is_osc_1 is True else 1
-                disabled:  1 if root.parent.is_osc_1 is True else 0                
+                disabled:  1 if (root.parent.is_osc_1 or osc_wave.text in ['DETUNE SAW', 'NOISE', 'INPUT']) is True else 0                 
             
     CircleKnob:
         id: pitch
@@ -102,6 +102,7 @@ kv = """
     
     XYKnob:
         text:    'PWM ENV'
+        crosshairs: True
         label_x: 'ATTACK'
         label_y: 'DEPTH'
         addresses: [ 0x3, 0x4 ]
@@ -110,6 +111,7 @@ kv = """
         disabled: True if osc_wave.text != 'PWM' else False
     XYKnob:
         text:    'PITCH ENV'
+        crosshairs: True
         label_x: 'ATTACK'
         label_y: 'DEPTH'                                                        
         addresses: [ 0x9, 0xa ]
@@ -177,7 +179,8 @@ kv = """
         on_value_y: app.send2midi( root.parent.osc_adr, self.addresses[1], self.value_y )
     
     XYKnob:
-        text:    'ENV'
+        text:    'FILTER ENV'
+        crosshairs: True
         label_x: 'ATTACK'
         label_y: 'DEPTH'
         addresses: [ 0x11, 0x12 ]
@@ -248,8 +251,8 @@ kv = """
         id: rate_knob
         text: 'RATE'
         disabled: True if rate_spinner.text != '0-100' else False
-        addresses: [ 0x19 + 9 * root.lfo_num ]
-        on_value: app.send2midi( root.parent.osc_adr, self.addresses[0], self.value )
+        #addresses: [ 0x19 + 9 * root.lfo_num ]
+        on_value: app.send2midi( root.parent.osc_adr, 0x19 + 9 * root.lfo_num, self.value )
                           
     BoxLayout:
         orientation: 'vertical'
@@ -337,6 +340,20 @@ BoxLayout:
         osc_text: '3'
         osc_adr: 0x30
 
+<NoSY300Connected>
+    title:'SY300 NOT CONNECTED'
+    size_hint: (None, None)
+    size: (400, 400)
+    BoxLayout:
+        orientation:'vertical'
+        Label: 
+            text:'Connect the SY300 and Restart the Program'
+        Button: 
+            text: 'Quit'
+            size_hint_y: .25
+            on_release: app.close_it()
+        
+
 """
 
 class Filter(GridLayout):
@@ -370,7 +387,8 @@ class OSCStrip(BoxLayout):
     osc_text = StringProperty('')
     osc_adr  = NumericProperty()
 
-
+class NoSY300Connected(Popup):
+    pass
 
 class PanelApp(App):
     title = 'SY300 OSC Sound Generation Control Panel'
@@ -378,6 +396,9 @@ class PanelApp(App):
     Window.top = 285  # 0 is the top of the screen
     Window.left = 185
     adr2knob = {}
+
+    def close_it(self):
+        Window.close()
 
     def build(self):
         r = Builder.load_string(kv)
@@ -397,10 +418,10 @@ class PanelApp(App):
 
         print('DEBUG: collected knobs for:')
         for k in sorted(self.adr2knob.keys(),key=lambda x: x[0]*100+x[1]):
-           if hasattr(self.adr2knob[k], 'text'):
-               print('  ', k, ' text is ', self.adr2knob[k].text, self.adr2knob[k])
-           else:
-               print('  ', k , '(knob does not have text field)', self.adr2knob[k])
+            if hasattr(self.adr2knob[k], 'text'):
+                print('  ', k, ' text is ', self.adr2knob[k].text, self.adr2knob[k])
+            else:
+                print('  ', k , '(knob does not have text field)', self.adr2knob[k])
         return r
 
     def send2midi(self, osc, adr, val):
@@ -414,30 +435,35 @@ class PanelApp(App):
                 adr = msg.data[9:11]
                 for d in msg.data[11:-1]:
                     if adr in self.adr2knob:
-                          self.adr2knob[adr].set_knob(adr[1],d)
+                        self.adr2knob[adr].set_knob(adr[1],d)
                     adr = (adr[0], adr[1]+1)
 
     def on_start(self):
         global to_sy300
         global from_sy300
+        global midi_ports
         midi_ports = get_midi_ports()
         if not midi_ports:
             print("Connection Failure: SY300 not connected")
+            no_sy300_popup = NoSY300Connected()
+            no_sy300_popup.open()
         else:
             print(f"SYS300 input:{midi_ports['in']}  output: {midi_ports['out']}")
-        to_sy300 = mido.open_output(midi_ports['out'])
-        from_sy300 = mido.open_input(midi_ports['in'])
-        Clock.schedule_interval(self.callback_read_midi, .1)
-        to_sy300.send(req_sy300([0x20,0x00,0x18,0x00], [4]))
-        to_sy300.send(req_sy300([0x20, 0x00, 0x20, 0x00], [0x29]))
-        to_sy300.send(req_sy300([0x20, 0x00, 0x28, 0x00], [0x29]))
-        to_sy300.send(req_sy300([0x20, 0x00, 0x30, 0x00], [0x29]))
+            to_sy300 = mido.open_output(midi_ports['out'])
+            from_sy300 = mido.open_input(midi_ports['in'])
+            Clock.schedule_interval(self.callback_read_midi, .1)
+            to_sy300.send(req_sy300([0x20,0x00,0x18,0x00], [4]))
+            to_sy300.send(req_sy300([0x20, 0x00, 0x20, 0x00], [0x29]))
+            to_sy300.send(req_sy300([0x20, 0x00, 0x28, 0x00], [0x29]))
+            to_sy300.send(req_sy300([0x20, 0x00, 0x30, 0x00], [0x29]))
 
     def on_stop(self):
         global to_sy300
         global from_sy300
-        to_sy300.close()
-        from_sy300.close()
+        global midi_ports
+        if midi_ports:
+            to_sy300.close()
+            from_sy300.close()
 
     def on_hide(self):
         Window.raise_window()
